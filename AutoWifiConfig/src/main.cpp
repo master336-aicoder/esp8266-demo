@@ -24,12 +24,21 @@
 #include "WifiManager.h"
 #include "ConfigPortal.h"
 #include "DeviceStatusWeb.h"
+#include "MqttManager.h"
+#include "TimeManager.h"
 
 // ========== 全局对象 ==========
 LedStatus led;
 WifiManager wifiMgr;
 ConfigPortal* portal = nullptr;
 DeviceStatusWeb* statusWeb = nullptr;
+MqttManager mqttMgr;
+TimeManager timeMgr;
+
+// GPIO模式跟踪数组（用于GPIO16等特殊引脚）
+uint8_t g_gpioMode[17] = {INPUT, INPUT, INPUT, INPUT, INPUT, INPUT,
+                           INPUT, INPUT, INPUT, INPUT, INPUT,
+                           INPUT, INPUT, INPUT, INPUT, INPUT, INPUT};
 
 // ========== 系统状态枚举 ==========
 enum AppState {
@@ -45,6 +54,7 @@ enum AppState {
 
 AppState currentState = STATE_INIT;
 AppState nextState = STATE_INIT;
+bool wifiServiceInitialized = false; // WiFi连接后启动的服务是否已初始化
 
 // 配网模式下尝试连接的WiFi信息
 String configSsid = "";
@@ -79,6 +89,9 @@ void setup() {
 
     // 初始化WiFi管理
     wifiMgr.begin();
+
+    // 初始化MQTT管理
+    mqttMgr.begin();
 
     DEBUG_PRINTF("[系统] 固件版本: 1.0.0\r\n");
     DEBUG_PRINTF("[系统] CPU频率: %d MHz\r\n", ESP.getCpuFreqMHz());
@@ -205,18 +218,29 @@ void handleStateConnectingWifi() {
 
 // ========== 状态：WiFi已连接（正常运行） ==========
 void handleStateWifiConnected() {
-    // 第一次进入时启动状态Web服务
-    static bool webStarted = false;
-    if (!webStarted) {
-        webStarted = true;
+    // 第一次进入时启动状态Web服务和时间同步
+    if (!wifiServiceInitialized) {
+        wifiServiceInitialized = true;
         statusWeb = new DeviceStatusWeb(80);
+        statusWeb->setMqttManager(&mqttMgr);
+        statusWeb->setTimeManager(&timeMgr);
         statusWeb->begin();
+
+        // 启动NTP时间同步
+        timeMgr.begin();
+        timeMgr.forceSync();
     }
 
     // 处理Web客户端请求
     if (statusWeb) {
         statusWeb->handleClient();
     }
+
+    // 时间同步
+    timeMgr.loop();
+
+    // 处理MQTT
+    mqttMgr.loop();
 
     // 检查WiFi连接状态
     static unsigned long lastCheck = 0;
@@ -229,14 +253,17 @@ void handleStateWifiConnected() {
             DEBUG_PRINTLN("[WiFi] 连接断开，尝试重连...");
             led.setStatus(STATUS_WIFI_CONNECTING);
             
+            // 停止MQTT
+            mqttMgr.disconnect();
+            
             // 停止Web服务
             if (statusWeb) {
                 statusWeb->stop();
                 delete statusWeb;
                 statusWeb = nullptr;
             }
-            webStarted = false;
-            
+            wifiServiceInitialized = false;
+
             setState(STATE_CONNECTING_WIFI);
             return;
         }
@@ -245,9 +272,11 @@ void handleStateWifiConnected() {
         static int counter = 0;
         counter++;
         if (counter % 12 == 0) { // 每分钟输出一次
-            DEBUG_PRINTF("[运行] 系统运行中 | IP: %s | RSSI: %d dBm | 内存: %d bytes\r\n",
+            bool mqttOk = mqttMgr.isConnected();
+            DEBUG_PRINTF("[运行] 系统运行中 | IP: %s | RSSI: %d dBm | MQTT: %s | 内存: %d bytes\r\n",
                 wifiMgr.getIP().c_str(),
                 WiFi.RSSI(),
+                mqttOk ? "已连接" : "未连接",
                 ESP.getFreeHeap());
         }
     }
