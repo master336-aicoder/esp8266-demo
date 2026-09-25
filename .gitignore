@@ -1,0 +1,42 @@
+# PlatformIO / Arduino 编译输出
+.pio/
+.pioenvs/
+.piolibdeps/
+build/
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+
+# 临时文件
+*.tmp
+*.log
+*.swp
+*.bak
+*.old
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE 文件
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Arduino CLI 二进制
+tools/arduino-cli/
+tools/arduino-cli.zip
+
+# 修复脚本（临时工具）
+tools/fix_scan.py
