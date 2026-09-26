@@ -12,6 +12,7 @@
 #include <ESP8266WiFi.h>
 #include "MqttManager.h"
 #include "TimeManager.h"
+#include "DHTManager.h"
 
 // GPIO引脚定义（ESP8266可用引脚）
 struct GpioInfo {
@@ -38,7 +39,7 @@ const int GPIO_COUNT = sizeof(GPIO_LIST) / sizeof(GPIO_LIST[0]);
 
 class DeviceStatusWeb {
 public:
-    DeviceStatusWeb(uint16_t port = 80) : _server(port), _mqttMgr(nullptr), _timeMgr(nullptr) {}
+    DeviceStatusWeb(uint16_t port = 80) : _server(port), _mqttMgr(nullptr), _timeMgr(nullptr), _dhtMgr(nullptr) {}
 
     void setMqttManager(MqttManager* mqttMgr) {
         _mqttMgr = mqttMgr;
@@ -46,6 +47,10 @@ public:
 
     void setTimeManager(TimeManager* timeMgr) {
         _timeMgr = timeMgr;
+    }
+
+    void setDHTManager(DHTManager* dhtMgr) {
+        _dhtMgr = dhtMgr;
     }
 
     void begin() {
@@ -84,6 +89,7 @@ private:
     ESP8266WebServer _server;
     MqttManager* _mqttMgr;
     TimeManager* _timeMgr;
+    DHTManager* _dhtMgr;
 
     // 获取GPIO模式字符串（中文）
     String getPinModeStr(uint8_t pin) {
@@ -154,6 +160,32 @@ private:
         sc("</div></div>");
         sc("<div class='info-i'><div class='info-l'>信道</div><div class='info-v'>" + String(WiFi.channel()) + "</div></div>");
         sc("</div></div></div>");
+
+        // 温湿度卡片（DHT11）
+        sc("<div class='card'><div class='card-h'>&#127777; 温湿度 (DHT11)</div><div class='card-b'>");
+        if (_dhtMgr && _dhtMgr->isValid()) {
+            float temp = _dhtMgr->getTemperature();
+            float hum = _dhtMgr->getHumidity();
+            sc("<div class='dht-row'>");
+            sc("<div class='dht-item'>");
+            sc("<div class='dht-icon'>&#127777;</div>");
+            sc("<div class='dht-val'>" + String(temp, 1) + "°C</div>");
+            sc("<div class='dht-label'>温度</div>");
+            sc("</div>");
+            sc("<div class='dht-item'>");
+            sc("<div class='dht-icon'>&#128167;</div>");
+            sc("<div class='dht-val'>" + String(hum, 1) + "%</div>");
+            sc("<div class='dht-label'>湿度</div>");
+            sc("</div>");
+            sc("</div>");
+            // 体感温度
+            float feels = temp * 0.8 + hum * 0.01 * (temp - 14.3) + 46.3;
+            sc("<div class='dht-info'>体感温度: " + String(feels, 1) + "°C | 引脚: D1 (GPIO5)</div>");
+        } else {
+            sc("<div class='dht-warn'>传感器未就绪或读取失败</div>");
+            sc("<div class='dht-info'>请检查 DHT11 接线：D1(GPIO5) → DATA, VCC → 3.3V, GND → GND</div>");
+        }
+        sc("</div></div>");
 
         // GPIO控制卡片
         sc("<div class='card'><div class='card-h'>&#128268; GPIO 接口控制</div><div class='card-b'>");
@@ -452,6 +484,14 @@ private:
         sc(".b-hi{flex:1;padding:5px 0;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;background:#e8f5e9;color:#2e7d32}");
         sc(".rssi-bar{height:6px;background:#e0e0e0;border-radius:3px;overflow:hidden;margin-top:6px}");
         sc(".rssi-fill{height:100%;background:linear-gradient(90deg,#f44336,#ff9800,#4caf50);border-radius:3px}");
+        // DHT温湿度样式
+        sc(".dht-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:12px}");
+        sc(".dht-item{text-align:center;padding:16px;background:linear-gradient(135deg,#667eea15,#764ba215);border-radius:12px}");
+        sc(".dht-icon{font-size:32px;margin-bottom:8px}");
+        sc(".dht-val{font-size:32px;font-weight:700;color:#333;line-height:1.2}");
+        sc(".dht-label{font-size:13px;color:#666;margin-top:4px}");
+        sc(".dht-info{font-size:12px;color:#888;text-align:center;padding-top:8px;border-top:1px solid #eee}");
+        sc(".dht-warn{text-align:center;padding:20px;color:#ff9800;font-size:14px;font-weight:500}");
         sc(".badge{padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600}");
         sc(".badge.on{background:#4caf50;color:#fff}");
         sc(".badge.off{background:#f44336;color:#fff}");
@@ -531,6 +571,17 @@ private:
         json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
         json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
         json += "\"channel\":" + String(WiFi.channel());
+        json += "},";
+        json += "\"dht\":{";
+        if (_dhtMgr && _dhtMgr->isValid()) {
+            json += "\"valid\":true,";
+            json += "\"temperature\":" + String(_dhtMgr->getTemperature(), 1) + ",";
+            json += "\"humidity\":" + String(_dhtMgr->getHumidity(), 1);
+        } else {
+            json += "\"valid\":false,";
+            json += "\"temperature\":0,";
+            json += "\"humidity\":0";
+        }
         json += "},";
         json += "\"gpio\":[";
         for (int i = 0; i < GPIO_COUNT; i++) {

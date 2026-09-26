@@ -26,6 +26,7 @@
 #include "DeviceStatusWeb.h"
 #include "MqttManager.h"
 #include "TimeManager.h"
+#include "DHTManager.h"
 
 // ========== 全局对象 ==========
 LedStatus led;
@@ -34,6 +35,7 @@ ConfigPortal* portal = nullptr;
 DeviceStatusWeb* statusWeb = nullptr;
 MqttManager mqttMgr;
 TimeManager timeMgr;
+DHTManager dhtMgr;
 
 // GPIO模式跟踪数组（用于GPIO16等特殊引脚）
 uint8_t g_gpioMode[17] = {INPUT, INPUT, INPUT, INPUT, INPUT, INPUT,
@@ -221,9 +223,14 @@ void handleStateWifiConnected() {
     // 第一次进入时启动状态Web服务和时间同步
     if (!wifiServiceInitialized) {
         wifiServiceInitialized = true;
+
+        // 初始化DHT温湿度传感器
+        dhtMgr.begin();
+
         statusWeb = new DeviceStatusWeb(80);
         statusWeb->setMqttManager(&mqttMgr);
         statusWeb->setTimeManager(&timeMgr);
+        statusWeb->setDHTManager(&dhtMgr);
         statusWeb->begin();
 
         // 启动NTP时间同步
@@ -238,6 +245,9 @@ void handleStateWifiConnected() {
 
     // 时间同步
     timeMgr.loop();
+
+    // DHT温湿度读取
+    dhtMgr.loop();
 
     // 处理MQTT
     mqttMgr.loop();
