@@ -43,6 +43,8 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
 
+    setCpuFrequencyMhz(240);
+
     Serial.println();
     Serial.println("========================================");
     Serial.println("   ESP32-CAM 智能摄像头");
@@ -86,14 +88,17 @@ void setup() {
         g_state = STATE_RUNNING;
         Serial.println();
         Serial.println("[SYS] WiFi 连接成功，进入运行模式");
+        Serial.printf("[SYS] IP地址: %s\r\n", WiFi.localIP().toString().c_str());
+        Serial.printf("[SYS] 信号强度: %d dBm\r\n", WiFi.RSSI());
+        Serial.printf("[SYS] Web管理: http://%s/\r\n", WiFi.localIP().toString().c_str());
 
         // 初始化摄像头
         if (!g_camera.begin()) {
             Serial.println("[ERR] 摄像头初始化失败！");
         }
 
-        // 初始化 SD 卡
-        g_sd.begin();  // SD 卡可能不存在，失败也没关系
+        // 初始化 SD 卡（跳过以避免总线冲突）
+        // g_sd.begin();
 
         // 初始化时间
         g_time.begin();
@@ -156,5 +161,5 @@ void loop() {
             break;
     }
 
-    delay(1);
+    delay(2);
 }

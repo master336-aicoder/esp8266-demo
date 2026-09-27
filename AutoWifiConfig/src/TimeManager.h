@@ -96,31 +96,36 @@ public:
     uint32_t getTimestamp() { return _timestamp; }
 
     // 纯算法实现时间格式化，不依赖 localtime
+    // _timestamp 存储 UTC 时间戳，显示时加上时区偏移
     String getDateTimeStr() {
         if (!_synced) return String("未同步");
         char buf[24];
-        formatDateTime(buf, sizeof(buf), _timestamp);
+        uint32_t localTs = _timestamp + _config.timezone * 3600;
+        formatDateTime(buf, sizeof(buf), localTs);
         return String(buf);
     }
 
     String getDateStr() {
         if (!_synced) return String("未同步");
         char buf[16];
-        formatDate(buf, sizeof(buf), _timestamp);
+        uint32_t localTs = _timestamp + _config.timezone * 3600;
+        formatDate(buf, sizeof(buf), localTs);
         return String(buf);
     }
 
     String getTimeStr() {
         if (!_synced) return String("--:--:--");
         char buf[12];
-        formatTimeOnly(buf, sizeof(buf), _timestamp);
+        uint32_t localTs = _timestamp + _config.timezone * 3600;
+        formatTimeOnly(buf, sizeof(buf), localTs);
         return String(buf);
     }
 
     String formatTime(uint32_t timestamp) {
         if (timestamp < 1577836800) return String("N/A");
         char buf[24];
-        formatDateTime(buf, sizeof(buf), timestamp);
+        uint32_t localTs = timestamp + _config.timezone * 3600;
+        formatDateTime(buf, sizeof(buf), localTs);
         return String(buf);
     }
 

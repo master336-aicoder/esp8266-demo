@@ -15,7 +15,7 @@ class CameraManager {
 public:
     CameraManager() : _initialized(false),
         _frameSize(FRAMESIZE_QVGA),
-        _quality(12), _effect(0),
+        _quality(15), _effect(0),
         _vflip(false), _hmirror(false) {}
 
     bool begin() {
@@ -40,13 +40,13 @@ public:
         config.pin_sccb_scl = SIOC_GPIO_NUM;
         config.pin_pwdn = PWDN_GPIO_NUM;
         config.pin_reset = RESET_GPIO_NUM;
-        config.xclk_freq_hz = 20000000;
+        config.xclk_freq_hz = 10000000;
         config.pixel_format = PIXFORMAT_JPEG;
 
         if (psramFound()) {
             config.frame_size = _frameSize;
             config.jpeg_quality = _quality;
-            config.fb_count = 2;
+            config.fb_count = 1;
         } else {
             config.frame_size = FRAMESIZE_QQVGA;
             config.jpeg_quality = 12;
@@ -177,7 +177,7 @@ private:
         if (_frameSize > 12) _frameSize = FRAMESIZE_QVGA;
 
         _quality = EEPROM.read(EEP_ADDR_CAM_QUAL);
-        if (_quality < 4 || _quality > 63) _quality = 12;
+        if (_quality < 4 || _quality > 63) _quality = 15;
 
         _effect = EEPROM.read(EEP_ADDR_CAM_EFF);
         if (_effect > 14) _effect = 0;

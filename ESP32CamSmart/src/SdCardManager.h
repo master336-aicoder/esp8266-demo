@@ -136,6 +136,16 @@ public:
         return SD.mkdir(path);
     }
 
+    // 格式化SD卡（删除所有文件）
+    bool format() {
+        if (!_initialized) return false;
+        DEBUG_PRINTLN_TAG("SD", "正在清空SD卡...");
+        deleteRecursive("/");
+        updateSpace();
+        DEBUG_PRINTLN_TAG("SD", "清空完成");
+        return true;
+    }
+
     // 删除目录（必须为空）
     bool removeDir(String path) {
         if (!_initialized) return false;
@@ -175,6 +185,25 @@ private:
     bool _initialized;
     size_t _totalBytes;
     size_t _usedBytes;
+
+    void deleteRecursive(String path) {
+        File root = SD.open(path);
+        if (!root || !root.isDirectory()) return;
+        File file = root.openNextFile();
+        while (file) {
+            String filePath = path + (path.endsWith("/") ? "" : "/") + file.name();
+            if (file.isDirectory()) {
+                file.close();
+                deleteRecursive(filePath);
+                SD.rmdir(filePath);
+            } else {
+                file.close();
+                SD.remove(filePath);
+            }
+            file = root.openNextFile();
+        }
+        root.close();
+    }
 };
 
 #endif // SD_CARD_MANAGER_H

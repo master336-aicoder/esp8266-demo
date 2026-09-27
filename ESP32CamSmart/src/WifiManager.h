@@ -33,6 +33,8 @@ public:
 
         DEBUG_PRINTF("[WIFI] 正在连接: %s ...\r\n", _ssid.c_str());
         WiFi.mode(WIFI_STA);
+        WiFi.setSleep(false);
+        WiFi.setTxPower(WIFI_POWER_19_5dBm);
         WiFi.begin(_ssid.c_str(), _password.c_str());
 
         unsigned long start = millis();
@@ -100,20 +102,19 @@ private:
             return;
         }
 
-        char buf[64];
-        // 读取 SSID
+        char ssid_buf[33];
         for (int i = 0; i < 32; i++) {
-            buf[i] = EEPROM.read(EEP_ADDR_SSID + i);
+            ssid_buf[i] = EEPROM.read(EEP_ADDR_SSID + i);
         }
-        buf[32] = '\0';
-        _ssid = String(buf);
+        ssid_buf[32] = '\0';
+        _ssid = String(ssid_buf);
 
-        // 读取密码
+        char pass_buf[65];
         for (int i = 0; i < 64; i++) {
-            buf[i] = EEPROM.read(EEP_ADDR_PASS + i);
+            pass_buf[i] = EEPROM.read(EEP_ADDR_PASS + i);
         }
-        buf[64] = '\0';
-        _password = String(buf);
+        pass_buf[64] = '\0';
+        _password = String(pass_buf);
 
         DEBUG_PRINTF("[WIFI] 已加载配置: SSID=%s\r\n", _ssid.c_str());
     }

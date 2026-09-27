@@ -162,23 +162,30 @@ private:
     String _ntpServer2;
 
     void loadConfig() {
-        char buf[64];
+        char buf[65];
 
         // NTP 服务器1
-        for (int i = 0; i < 64; i++) buf[i] = EEPROM.read(EEP_ADDR_NTP_SVR1 + i);
-        buf[63] = '\0';
+        for (int i = 0; i < 64; i++) {
+            char c = (char)EEPROM.read(EEP_ADDR_NTP_SVR1 + i);
+            buf[i] = (c == 0xFF || c < 32 || c > 126) ? 0 : c;
+        }
+        buf[64] = '\0';
         _ntpServer1 = String(buf);
-        if (_ntpServer1.isEmpty()) _ntpServer1 = "ntp.aliyun.com";
+        if (_ntpServer1.length() == 0) _ntpServer1 = "ntp.aliyun.com";
 
         // NTP 服务器2
-        for (int i = 0; i < 64; i++) buf[i] = EEPROM.read(EEP_ADDR_NTP_SVR2 + i);
-        buf[63] = '\0';
+        for (int i = 0; i < 64; i++) {
+            char c = (char)EEPROM.read(EEP_ADDR_NTP_SVR2 + i);
+            buf[i] = (c == 0xFF || c < 32 || c > 126) ? 0 : c;
+        }
+        buf[64] = '\0';
         _ntpServer2 = String(buf);
-        if (_ntpServer2.isEmpty()) _ntpServer2 = "ntp.ntsc.ac.cn";
+        if (_ntpServer2.length() == 0) _ntpServer2 = "ntp.ntsc.ac.cn";
 
         // 时区
-        _timezone = (int8_t)EEPROM.read(EEP_ADDR_NTP_TZ);
-        if (_timezone < -12 || _timezone > 12) _timezone = 8;
+        int8_t tz = (int8_t)EEPROM.read(EEP_ADDR_NTP_TZ);
+        if (tz < -12 || tz > 12) tz = 8;
+        _timezone = tz;
     }
 
     void saveConfig() {
