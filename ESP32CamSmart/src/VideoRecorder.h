@@ -1,6 +1,7 @@
 /*
  * VideoRecorder - 视频录制
- * 将连续 JPEG 帧保存为 AVI 格式视频到 SD 卡
+ * 将连续 JPEG 帧封装为标准 AVI(MJPEG) 视频保存到 SD 卡
+ * 结构：RIFF/AVI + LIST(hdrl) + LIST(movi) + idx1 索引
  */
 
 #ifndef VIDEO_RECORDER_H
@@ -13,83 +14,30 @@
 #include "CameraManager.h"
 #include "SdCardManager.h"
 
-// AVI 文件头结构（简化版，MJPEG 格式）
-struct AviHeader {
-    char riff[4];           // "RIFF"
-    uint32_t fileSize;      // 文件大小 - 8
-    char avi[4];            // "AVI "
-    char hdrl[4];           // "hdrl"
-    uint32_t hdrlSize;      // hdrl 块大小
-    char avih[4];           // "avih"
-    uint32_t avihSize;      // avih 块大小 (56)
-    uint32_t microSecPerFrame;  // 每帧微秒
-    uint32_t maxBytesPerSec;    // 最大字节率
-    uint32_t paddingGranularity; // 0
-    uint32_t flags;             // 0
-    uint32_t totalFrames;       // 总帧数
-    uint32_t initialFrames;     // 0
-    uint32_t streams;           // 流数量 (1)
-    uint32_t suggestedBufferSize; // 建议缓冲区大小
-    uint32_t width;             // 宽度
-    uint32_t height;            // 高度
-    uint32_t scale;             // 时间刻度
-    uint32_t rate;              // 速率 = scale * fps
-    uint32_t start;             // 0
-    uint32_t length;            // 总帧数
-    // strl 块
-    char strl[4];           // "strl"
-    uint32_t strlSize;      // strl 块大小
-    char strh[4];           // "strh"
-    uint32_t strhSize;      // strh 块大小 (56)
-    char fccType[4];        // "vids"
-    char fccHandler[4];     // "MJPG"
-    uint32_t flags2;        // 0
-    uint16_t priority;      // 0
-    uint16_t language;      // 0
-    uint32_t initialFrames2; // 0
-    uint32_t scale2;         // 时间刻度
-    uint32_t rate2;          // 速率
-    uint32_t start2;         // 0
-    uint32_t length2;        // 总帧数
-    uint32_t suggestedBufferSize2; // 建议缓冲区大小
-    uint32_t quality2;       // 0
-    uint32_t sampleSize;     // 0
-    // strf 块
-    char strf[4];           // "strf"
-    uint32_t strfSize;      // strf 块大小 (40)
-    uint32_t biSize;        // 40
-    int32_t biWidth;        // 宽度
-    int32_t biHeight;       // 高度
-    uint16_t biPlanes;      // 1
-    uint16_t biBitCount;    // 24
-    uint32_t biCompression;  // "MJPG"
-    uint32_t biSizeImage;    // 0
-    int32_t biXPelsPerMeter; // 0
-    int32_t biYPelsPerMeter; // 0
-    uint32_t biClrUsed;      // 0
-    uint32_t biClrImportant; // 0
-    // movi 块
-    char movi[4];           // "movi"
-    uint32_t moviSize;      // movi 块大小
-};
+// AVI 头部关键偏移（字节）
+#define AVI_OFF_RIFF_SIZE     4
+#define AVI_OFF_TOTAL_FRAMES 48
+#define AVI_OFF_STRH_LENGTH  140
+#define AVI_OFF_MOVI_SIZE    216
+#define AVI_OFF_MOVI_DATA    224
+#define AVI_MAX_INDEX        3000
 
 class VideoRecorder {
 public:
     VideoRecorder(CameraManager* cam, SdCardManager* sd) :
         _camera(cam), _sd(sd),
-        _recording(false), _frameCount(0),
-        _fps(15), _maxDurationSec(300),
-        _startTime(0), _totalSize(0) {}
+        _recording(false), _frameCount(0), _fps(10), _maxDurationSec(300),
+        _startTime(0), _totalSize(0), _moviBytes(0), _maxFrameSize(0) {}
 
-    bool startRecording(String filename = "") {
+    bool startRecording(String filename = "", int fps = -1) {
         if (_recording) return false;
-        if (!_sd->isInitialized()) return false;
+        if (!_sd || !_sd->isInitialized()) return false;
+        if (!_camera || !_camera->isInitialized()) return false;
+        if (fps > 0 && fps <= 30) _fps = fps;
 
-        // 生成文件名
         if (filename.isEmpty()) {
             char buf[64];
-            uint32_t now = millis() / 1000;
-            snprintf(buf, sizeof(buf), "/video_%05lu.avi", now);
+            snprintf(buf, sizeof(buf), "/video_%08lu.avi", (unsigned long)(millis() / 1000));
             filename = String(buf);
         }
 
@@ -99,86 +47,65 @@ public:
             return false;
         }
 
-        // 写入占位的 AVI 头（后面更新）
-        AviHeader hdr;
-        memset(&hdr, 0, sizeof(hdr));
-        memcpy(hdr.riff, "RIFF", 4);
-        hdr.fileSize = sizeof(hdr) - 8;
-        memcpy(hdr.avi, "AVI ", 4);
-        memcpy(hdr.hdrl, "hdrl", 4);
-        hdr.hdrlSize = sizeof(hdr) - 12;
-        memcpy(hdr.avih, "avih", 4);
-        hdr.avihSize = 56;
-        hdr.microSecPerFrame = 1000000 / _fps;
-        hdr.totalFrames = 0;
-        hdr.streams = 1;
-        hdr.width = 320;  // 临时值
-        hdr.height = 240;
-        hdr.scale = 1;
-        hdr.rate = _fps;
-        hdr.length = 0;
+        int w = _camera->getWidth();
+        int h = _camera->getHeight();
+        writeHeader((uint32_t)w, (uint32_t)h);
 
-        memcpy(hdr.strl, "strl", 4);
-        hdr.strlSize = 100;
-        memcpy(hdr.strh, "strh", 4);
-        hdr.strhSize = 56;
-        memcpy(hdr.fccType, "vids", 4);
-        memcpy(hdr.fccHandler, "MJPG", 4);
-        hdr.scale2 = 1;
-        hdr.rate2 = _fps;
-        hdr.length2 = 0;
-
-        memcpy(hdr.strf, "strf", 4);
-        hdr.strfSize = 40;
-        hdr.biSize = 40;
-        hdr.biWidth = 320;
-        hdr.biHeight = 240;
-        hdr.biPlanes = 1;
-        hdr.biBitCount = 24;
-        hdr.biCompression = 0x47504A4D; // "MJPG"
-
-        memcpy(hdr.movi, "movi", 4);
-        hdr.moviSize = 0;
-
-        _file.write((uint8_t*)&hdr, sizeof(hdr));
-        _headerOffset = 0;
-        _frameCount = 0;
-        _totalSize = sizeof(hdr);
         _filename = filename;
+        _frameCount = 0;
+        _moviBytes = 0;
+        _maxFrameSize = 0;
+        _totalSize = AVI_OFF_MOVI_DATA;
         _recording = true;
         _startTime = millis();
 
-        DEBUG_PRINTF("[REC] 开始录制: %s\r\n", filename.c_str());
+        DEBUG_PRINTF("[REC] 开始录制: %s (%d x %d @ %d fps)\r\n",
+            filename.c_str(), w, h, _fps);
         return true;
     }
 
     bool addFrame(camera_fb_t* fb) {
         if (!_recording || !fb) return false;
 
-        // 写入帧标记 "00dc"
+        // SD 剩余空间保护（留 64KB）
+        if (_sd->getFreeBytes() < 65536) {
+            DEBUG_PRINTLN_TAG("REC", "SD空间不足，停止录制");
+            stopRecording();
+            return false;
+        }
+
+        uint32_t chunkOffset = _moviBytes + 4; // 相对于 movi fourcc
+
+        // 帧块 "00dc" + 长度 + 数据 + 4字节对齐
         char tag[4] = {'0', '0', 'd', 'c'};
         _file.write((uint8_t*)tag, 4);
-
-        // 写入帧大小
         uint32_t size = fb->len;
         _file.write((uint8_t*)&size, 4);
+        size_t written = _file.write(fb->buf, fb->len);
+        if (written != fb->len) {
+            DEBUG_PRINTLN_TAG("REC", "写入失败，停止录制");
+            stopRecording();
+            return false;
+        }
 
-        // 写入帧数据
-        _file.write(fb->buf, fb->len);
-
-        // 对齐到 4 字节
-        int padding = (4 - (size % 4)) % 4;
+        uint8_t padding = (uint8_t)((4 - (size % 4)) % 4);
         if (padding > 0) {
             uint8_t pad[4] = {0};
             _file.write(pad, padding);
         }
 
+        if (_frameCount < AVI_MAX_INDEX) {
+            _idxOffset[_frameCount] = chunkOffset;
+            _idxSize[_frameCount] = size;
+        }
         _frameCount++;
-        _totalSize += 8 + size + padding;
+        _moviBytes += 8 + size + padding;
+        _totalSize = AVI_OFF_MOVI_DATA + _moviBytes;
+        if (size > _maxFrameSize) _maxFrameSize = size;
 
-        // 检查是否达到最大时长
-        if (millis() - _startTime >= _maxDurationSec * 1000UL) {
-            DEBUG_PRINTLN("[REC] 达到最大时长，自动停止");
+        if (millis() - _startTime >= (uint32_t)_maxDurationSec * 1000UL ||
+            _frameCount >= AVI_MAX_INDEX) {
+            DEBUG_PRINTLN_TAG("REC", "达到录制上限，自动停止");
             stopRecording();
             return false;
         }
@@ -200,40 +127,52 @@ public:
     void stopRecording() {
         if (!_recording) return;
 
-        // 更新 AVI 头
-        uint32_t fileSize = _totalSize;
-        uint32_t moviSize = _totalSize - sizeof(AviHeader);
+        uint32_t frames = _frameCount > AVI_MAX_INDEX ? AVI_MAX_INDEX : _frameCount;
 
-        _file.seek(4);
-        uint32_t fs = fileSize - 8;
-        _file.write((uint8_t*)&fs, 4);
+        // 写入 idx1 索引块
+        _file.seek(_totalSize);
+        uint32_t idxSize = frames * 16;
+        if (frames > 0) {
+            char idx1[4] = {'i', 'd', 'x', '1'};
+            _file.write((uint8_t*)idx1, 4);
+            _file.write((uint8_t*)&idxSize, 4);
+            for (uint32_t i = 0; i < frames; i++) {
+                char id[4] = {'0', '0', 'd', 'c'};
+                uint32_t flags = 0x10; // AVIIF_KEYFRAME
+                _file.write((uint8_t*)id, 4);
+                _file.write((uint8_t*)&flags, 4);
+                _file.write((uint8_t*)&_idxOffset[i], 4);
+                _file.write((uint8_t*)&_idxSize[i], 4);
+            }
+        }
 
-        // 更新总帧数
-        _file.seek(48);
-        _file.write((uint8_t*)&_frameCount, 4);
+        uint32_t fileSize = _totalSize + (frames > 0 ? 8 + idxSize : 0);
 
-        // 更新 movi 大小
-        _file.seek(sizeof(AviHeader) - 4);
-        _file.write((uint8_t*)&moviSize, 4);
+        // 回填头部关键字段
+        patchU32(AVI_OFF_RIFF_SIZE, fileSize - 8);
+        patchU32(AVI_OFF_TOTAL_FRAMES, _frameCount);
+        patchU32(AVI_OFF_STRH_LENGTH, _frameCount);
+        // movi LIST 的大小必须包含 "movi" 四个字节的类型码，否则播放器按大小跳过时会错位
+        patchU32(AVI_OFF_MOVI_SIZE, _moviBytes + 4);
+        // 建议缓冲区大小
+        patchU32(60, _maxFrameSize);
 
         _file.close();
         _recording = false;
-
         _sd->updateSpace();
 
         DEBUG_PRINTF("[REC] 录制完成: %s\r\n", _filename.c_str());
-        DEBUG_PRINTF("[REC] 总帧数: %lu, 总大小: %s\r\n",
-            _frameCount, _sd->formatBytes(_totalSize).c_str());
+        DEBUG_PRINTF("[REC] 帧数: %lu, 大小: %s\r\n",
+            (unsigned long)_frameCount, _sd->formatBytes(fileSize).c_str());
     }
 
     bool isRecording() { return _recording; }
     uint32_t getFrameCount() { return _frameCount; }
-    uint32_t getDurationMs() { return millis() - _startTime; }
+    uint32_t getDurationMs() { return _recording ? (millis() - _startTime) : 0; }
     String getFilename() { return _filename; }
-
-    void setFps(int fps) { if (fps > 0 && fps <= 30) _fps = fps; }
+    size_t getFileSize() { return _totalSize; }
     int getFps() { return _fps; }
-
+    void setFps(int fps) { if (fps > 0 && fps <= 30) _fps = fps; }
     void setMaxDuration(int sec) { if (sec > 0) _maxDurationSec = sec; }
     int getMaxDuration() { return _maxDurationSec; }
 
@@ -247,9 +186,84 @@ private:
     int _fps;
     int _maxDurationSec;
     uint32_t _startTime;
-    size_t _totalSize;
-    size_t _headerOffset;
+    uint32_t _totalSize;
+    uint32_t _moviBytes;
+    uint32_t _maxFrameSize;
     String _filename;
+
+    uint32_t _idxOffset[AVI_MAX_INDEX];
+    uint32_t _idxSize[AVI_MAX_INDEX];
+
+    void w4(const char* s) { _file.write((uint8_t*)s, 4); }
+    void wU32(uint32_t v) { _file.write((uint8_t*)&v, 4); }
+    void wU16(uint16_t v) { _file.write((uint8_t*)&v, 2); }
+
+    void writeHeader(uint32_t width, uint32_t height) {
+        w4("RIFF");
+        wU32(0);              // RIFF size，稍后回填
+        w4("AVI ");
+
+        w4("LIST");
+        wU32(192);            // hdrl 列表长度（偏移20~212）
+        w4("hdrl");
+
+        w4("avih");
+        wU32(56);
+        wU32(1000000UL / (uint32_t)_fps); // 每帧微秒
+        wU32(0);              // 最大字节率
+        wU32(0);              // 对齐粒度
+        wU32(0x10);           // AVIF_HASINDEX
+        wU32(0);              // 总帧数，稍后回填
+        wU32(0);              // 初始帧
+        wU32(1);              // 流数量
+        wU32(0);              // 建议缓冲区，稍后回填
+        wU32(width);
+        wU32(height);
+        for (int i = 0; i < 4; i++) wU32(0); // 保留
+
+        w4("LIST");
+        wU32(116);            // strl 列表长度 = 4("strl") + 64(strh) + 48(strf)，漏算 strf 会让严格的播放器解析错位
+        w4("strl");
+
+        w4("strh");
+        wU32(56);
+        w4("vids");
+        w4("MJPG");
+        wU32(0);              // flags
+        wU16(0);              // priority
+        wU16(0);              // language
+        wU32(0);              // initialFrames
+        wU32(1);              // scale
+        wU32((uint32_t)_fps); // rate
+        wU32(0);              // start
+        wU32(0);              // length，稍后回填
+        wU32(0);              // suggestedBufferSize
+        wU32(0xFFFFFFFF);     // quality = -1
+        wU32(0);              // sampleSize
+        wU16(0); wU16(0);     // rcFrame.left/top
+        wU16((uint16_t)width); wU16((uint16_t)height);
+
+        w4("strf");
+        wU32(40);
+        wU32(40);             // biSize
+        wU32(width);
+        wU32(height);
+        wU16(1);              // biPlanes
+        wU16(24);             // biBitCount
+        w4("MJPG");           // biCompression
+        wU32(0);              // biSizeImage
+        wU32(0); wU32(0);     // 分辨率单位
+        wU32(0); wU32(0);     // 调色板
+
+        w4("LIST");
+        wU32(0);              // movi 大小，稍后回填
+        w4("movi");
+    }
+
+    void patchU32(uint32_t offset, uint32_t value) {
+        _file.seek(offset);
+        _file.write((uint8_t*)&value, 4);
+    }
 };
 
 #endif // VIDEO_RECORDER_H

@@ -70,6 +70,21 @@ public:
         return 0;
     }
 
+    // 写入调用方缓冲，避免返回 String 造成堆碎片
+    void getDateTimeChars(char* buf, size_t n) {
+        if (!buf || n == 0) return;
+        if (!_synced) {
+            snprintf(buf, n, "未同步");
+            return;
+        }
+        time_t now = getTimestamp();
+        struct tm t;
+        localtime_r(&now, &t);
+        snprintf(buf, n, "%04d-%02d-%02d %02d:%02d:%02d",
+            t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
+            t.tm_hour, t.tm_min, t.tm_sec);
+    }
+
     String getDateTimeStr() {
         if (!_synced) return "未同步";
         time_t now = getTimestamp();

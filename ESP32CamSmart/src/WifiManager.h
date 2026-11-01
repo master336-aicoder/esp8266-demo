@@ -16,7 +16,8 @@ class WifiManager {
 public:
     WifiManager() : _server(80), _state(STATE_STARTUP),
         _retryCount(0), _lastRetryTime(0),
-        _apMode(false) {}
+        _apMode(false), _downSince(0), _lastReconnect(0),
+        _reconnectFails(0) {}
 
     void begin() {
         EEPROM.begin(EEPROM_SIZE);
@@ -59,7 +60,8 @@ public:
     void startPortal() {
         _apMode = true;
         WiFi.mode(WIFI_AP_STA);
-        WiFi.softAP(AP_SSID, AP_PASSWORD[0] ? AP_PASSWORD : NULL);
+        WiFi.softAP(AP_SSID, AP_PASSWORD[0] ? AP_PASSWORD : NULL, 6, 0, 4);
+        WiFi.setSleep(false);
 
         DEBUG_PRINTF("[PORTAL] 配网热点已启动: %s\r\n", AP_SSID);
         DEBUG_PRINTF("[PORTAL] 访问地址: http://192.168.4.1/\r\n");
@@ -72,6 +74,49 @@ public:
         _server.begin();
     }
 
+    // 仅开启热点（不占用 80 端口），让设备在没有路由器时也能直接使用全部功能
+    void startApOnly() {
+        WiFi.mode(WIFI_AP);
+        WiFi.softAP(AP_SSID, AP_PASSWORD[0] ? AP_PASSWORD : NULL, 6, 0, 4);
+        WiFi.setSleep(false);
+        _apMode = false;
+        DEBUG_PRINTF("[WIFI] 已开启热点: %s，访问 http://%s/\r\n",
+            AP_SSID, WiFi.softAPIP().toString().c_str());
+    }
+
+    // 运行期 WiFi 维护：STA 掉线后自动重连（完全非阻塞，不卡 Web 与录像）
+    void maintainWifi() {
+        if (WiFi.getMode() != WIFI_STA) return;   // 热点模式下不处理
+        if (_ssid.isEmpty()) return;              // 无凭据不处理
+
+        if (WiFi.status() == WL_CONNECTED) {
+            if (_downSince != 0) {
+                DEBUG_PRINTF("[WIFI] 已恢复连接，IP: %s\r\n",
+                    WiFi.localIP().toString().c_str());
+            }
+            _downSince = 0;
+            _reconnectFails = 0;
+            return;
+        }
+
+        unsigned long now = millis();
+        if (_downSince == 0) {
+            _downSince = now;
+            DEBUG_PRINTLN_TAG("WIFI", "检测到掉线，等待自动重连");
+            return;
+        }
+
+        // 掉线超过 15 秒、且距上次重连超过 30 秒才重试
+        if (now - _downSince < 15000) return;
+        if (_lastReconnect != 0 && now - _lastReconnect < 30000) return;
+
+        _lastReconnect = now;
+        _reconnectFails++;
+        DEBUG_PRINTF("[WIFI] 第 %d 次自动重连: %s\r\n", _reconnectFails, _ssid.c_str());
+        WiFi.disconnect();
+        WiFi.begin(_ssid.c_str(), _password.c_str());
+    }
+
     void loop() {
         if (_apMode) {
             _server.handleClient();
@@ -81,6 +126,24 @@ public:
     bool isApMode() { return _apMode; }
     String getSsid() { return _ssid; }
     String getPassword() { return _password; }
+
+    // 保存凭据（运行模式下修改 WiFi 用）
+    bool saveCredentials(const String& ssid, const String& password) {
+        if (ssid.isEmpty()) return false;
+        saveConfig(ssid, password);
+        return true;
+    }
+
+    // 清除已保存的 WiFi 凭据：下次启动会自动进入配网门户
+    void clearCredentials() {
+        _ssid = "";
+        _password = "";
+        for (int i = 0; i < 32; i++) EEPROM.write(EEP_ADDR_SSID + i, 0);
+        for (int i = 0; i < 64; i++) EEPROM.write(EEP_ADDR_PASS + i, 0);
+        EEPROM.write(EEP_ADDR_MAGIC, 0);
+        EEPROM.commit();
+        DEBUG_PRINTLN_TAG("WIFI", "WiFi 凭据已清除");
+    }
 
     bool hasConfig() {
         return EEPROM.read(EEP_ADDR_MAGIC) == EEPROM_MAGIC && !_ssid.isEmpty();
@@ -92,6 +155,9 @@ private:
     int _retryCount;
     unsigned long _lastRetryTime;
     bool _apMode;
+    unsigned long _downSince;      // 掉线起始时刻（0 表示在线）
+    unsigned long _lastReconnect;  // 上次自动重连时刻
+    int _reconnectFails;
 
     String _ssid;
     String _password;
@@ -274,6 +340,7 @@ private:
         saveConfig(ssid, pass);
 
         // 尝试连接
+        WiFi.disconnect(false, false);
         WiFi.mode(WIFI_STA);
         WiFi.begin(ssid.c_str(), pass.c_str());
 
@@ -286,13 +353,15 @@ private:
             String ip = WiFi.localIP().toString();
             _server.send(200, "application/json",
                 "{\"success\":true,\"ip\":\"" + ip + "\"}");
-            DEBUG_PRINTF("[PORTAL] 连接成功: %s\r\n", ip.c_str());
+            DEBUG_PRINTF("[PORTAL] 连接成功: %s，即将重启进入运行模式\r\n", ip.c_str());
+            delay(500);
+            ESP.restart();
         } else {
             _server.send(200, "application/json",
                 "{\"success\":false,\"error\":\"连接失败，请检查密码\"}");
             // 重新进入 AP 模式
             WiFi.mode(WIFI_AP_STA);
-            WiFi.softAP(AP_SSID, AP_PASSWORD[0] ? AP_PASSWORD : NULL);
+            WiFi.softAP(AP_SSID, AP_PASSWORD[0] ? AP_PASSWORD : NULL, 6, 0, 4);
         }
     }
 

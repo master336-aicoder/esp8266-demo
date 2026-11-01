@@ -42,8 +42,8 @@
 
 // ============== LED 引脚 ==============
 #define LED_PIN           4    // 闪光灯引脚（也做状态指示）
-#define LED_ON            LOW
-#define LED_OFF           HIGH
+#define LED_ON            HIGH   // 实测：GPIO4 输出高电平点亮补光灯
+#define LED_OFF           LOW    // 输出低电平熄灭
 
 // ============== SD 卡引脚 ==============
 #define SD_CS_PIN          13
